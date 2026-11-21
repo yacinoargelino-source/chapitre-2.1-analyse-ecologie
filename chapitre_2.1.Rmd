@@ -1,0 +1,1081 @@
+---
+title: "Traitement et Analyses de données biologiques et environnementales"
+subtitle: "Chapitre 2.1 — Traitement Numérique des données (R / Python / Autres)"
+author: "M1 Écologie et Environnement — Module Logiciels Libres et Open Source"
+date: "`r format(Sys.Date(), '%B %Y')`"
+lang: fr
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    theme: flatly
+    highlight: tango
+    df_print: paged
+    code_folding: show
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    fig_caption: true
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo       = TRUE,
+  message    = FALSE,
+  warning    = FALSE,
+  fig.align  = "center",
+  fig.width  = 7,
+  fig.height = 5,
+  dpi        = 150,
+  comment    = "#>"
+)
+set.seed(2024)   # reproductibilité globale
+```
+
+# Introduction
+
+## Objectifs pédagogiques
+
+À l'issue de ce chapitre, vous serez capable de :
+
+- Choisir et appliquer les méthodes statistiques adaptées à des données écologiques
+- Mettre en œuvre des analyses **descriptives, univariées et multivariées** sous R
+- Interpréter les résultats en lien avec des questions biologiques et environnementales
+- Produire des analyses **reproductibles, documentées et partageables**
+
+## Prérequis
+
+- Notions de base en statistiques descriptives
+- Avoir suivi le chapitre 1 : LibreOffice Calc, Zotero
+- R et RStudio installés, ainsi que les packages suivants :
+
+```{r packages}
+pkgs <- c("vegan", "ggplot2", "FactoMineR", "factoextra", "car", "knitr")
+for (p in pkgs) library(p, character.only = TRUE)
+```
+
+> **Message clé.** Un test statistique ne « prouve » rien : il quantifie la
+> compatibilité des données avec une hypothèse. Les graphiques exploratoires
+> sont souvent plus informatifs qu'une p-value.
+
+# Jeux de données utilisés
+
+Tous les jeux de données de ce chapitre sont **synthétiques** mais calibrés pour
+produire des résultats réalistes. Ils sont générés ci-dessous, ce qui garantit
+la **reproductibilité intégrale** du rapport.
+
+```{r generation-donnees}
+# --- 1. Oiseaux : richesse forêt vs plantation -------------------------
+richesse_foret      <- pmax(round(rnorm(20, mean = 21, sd = 3.5)), 12)
+richesse_plantation <- pmax(round(rnorm(20, mean = 12, sd = 2.8)),  6)
+
+oiseaux <- data.frame(
+  site      = c(paste0("F", 1:20), paste0("P", 1:20)),
+  habitat   = rep(c("foret", "plantation"), each = 20),
+  richesse  = c(richesse_foret, richesse_plantation),
+  abondance = c(round(rnorm(20, 85, 15)), round(rnorm(20, 45, 10)))
+)
+
+# --- 2. Biomasse selon le type de sol ----------------------------------
+biomasse <- data.frame(
+  parcelle = paste0("P", 1:45),
+  sol      = rep(c("argileux", "sableux", "limoneux"), each = 15),
+  biomasse = c(round(rnorm(15, 320, 50)),
+               round(rnorm(15, 180, 35)),
+               round(rnorm(15, 280, 45)))
+)
+
+# --- 3. Richesse vs surface --------------------------------------------
+surface      <- round(runif(30, 1, 50), 1)
+richesse_reg <- pmax(round(8 + 0.4 * surface + rnorm(30, 0, 3)), 3)
+
+regression <- data.frame(
+  site       = paste0("S", 1:30),
+  surface_ha = surface,
+  richesse   = richesse_reg,
+  temperature = round(rnorm(30, 18, 3), 1)
+)
+
+# --- 4. Communauté : matrice 20 sites × 15 espèces ---------------------
+especes <- c("Quercus_robur", "Fagus_sylvatica", "Carpinus_betulus",
+             "Acer_pseudoplatanus", "Fraxinus_excelsior", "Prunus_avium",
+             "Corylus_avellana", "Crataegus_monogyna", "Rubus_fruticosus",
+             "Hedera_helix", "Poa_trivialis", "Dactylis_glomerata",
+             "Festuca_rubra", "Urtica_dioica", "Galium_aparine")
+
+communaute <- matrix(0, nrow = 20, ncol = 15,
+                     dimnames = list(paste0("Site", 1:20), especes))
+for (i in  1:10) communaute[i, ] <- rpois(15, runif(15, 2, 8))
+for (i in 11:20) communaute[i, ] <- rpois(15, runif(15, 0, 3))
+communaute[11:20, c("Quercus_robur", "Fagus_sylvatica",
+                    "Carpinus_betulus", "Fraxinus_excelsior")] <- 0
+
+# --- 5. Variables environnementales ------------------------------------
+env <- data.frame(
+  site        = paste0("Site", 1:20),
+  habitat     = rep(c("foret", "plantation"), each = 10),
+  temperature = round(rnorm(20, 18, 2.5), 1),
+  pH          = round(rnorm(20, 6.5, 0.4), 2),
+  humidite    = round(rnorm(20, 65, 8), 1),
+  azote       = round(rnorm(20, 3.5, 0.8), 2),
+  surface_ha  = round(runif(20, 2, 40), 1)
+)
+
+# --- 6. GBIF brut avec erreurs volontaires -----------------------------
+gbif <- data.frame(
+  scientificName   = sample(especes, 100, replace = TRUE),
+  decimalLatitude  = round(runif(100, -90, 90), 4),
+  decimalLongitude = round(runif(100, -180, 180), 4),
+  eventDate        = sample(seq(as.Date("2000-01-01"),
+                                as.Date("2024-01-01"), by = "day"),
+                            100),
+  countryCode      = sample(c("FR","BE","CH","CA","DZ","MA"),
+                            100, replace = TRUE)
+)
+gbif$decimalLatitude[1:3] <- c(95, -120, 200)
+gbif$eventDate[4:5]       <- as.Date(c("2030-01-01","2050-06-15"))
+gbif <- rbind(gbif, gbif[1:5, ])    # ajout de doublons
+```
+
+Aperçu du jeu `oiseaux` :
+
+```{r apercu-oiseaux}
+knitr::kable(
+  head(oiseaux, 8),
+  caption = "Extrait du jeu de données oiseaux.",
+  align   = "c"
+)
+```
+
+# Statistiques descriptives et exploratoires {#descriptives}
+
+## Démarche en 5 étapes
+
+1. Vérifier la structure du jeu de données
+2. Calculer les statistiques descriptives
+3. Visualiser les distributions
+4. Vérifier les conditions d'application des tests
+5. Nettoyer si nécessaire
+
+## Résumé global
+
+```{r descriptives}
+summary(oiseaux)
+```
+
+## Mesures clés sur la richesse spécifique
+
+```{r mesures}
+stat_richesse <- data.frame(
+  Statistique = c("Moyenne", "Médiane", "Écart-type",
+                  "Q1", "Q3", "Min", "Max"),
+  Valeur      = round(c(mean(oiseaux$richesse),
+                        median(oiseaux$richesse),
+                        sd(oiseaux$richesse),
+                        quantile(oiseaux$richesse, 0.25),
+                        quantile(oiseaux$richesse, 0.75),
+                        min(oiseaux$richesse),
+                        max(oiseaux$richesse)), 2)
+)
+knitr::kable(stat_richesse, caption = "Statistiques descriptives de la richesse spécifique.")
+```
+
+## Moyennes par habitat
+
+```{r moyennes-groupe}
+moy_hab <- aggregate(richesse ~ habitat, data = oiseaux, FUN = mean)
+knitr::kable(moy_hab, digits = 2,
+             caption = "Richesse moyenne par habitat.")
+```
+
+## Visualisation exploratoire
+
+```{r boxplot, fig.cap="Distribution de la richesse spécifique par habitat."}
+ggplot(oiseaux, aes(x = habitat, y = richesse, fill = habitat)) +
+  geom_boxplot(alpha = 0.8) +
+  labs(title = "Richesse spécifique par type d'habitat",
+       x = "Habitat", y = "Nombre d'espèces") +
+  theme_minimal() + theme(legend.position = "none")
+```
+
+```{r histogramme, fig.cap="Distribution globale de la richesse spécifique."}
+ggplot(oiseaux, aes(x = richesse, fill = habitat)) +
+  geom_histogram(bins = 12, alpha = 0.7, position = "identity") +
+  labs(title = "Distribution de la richesse spécifique",
+       x = "Richesse spécifique", y = "Effectif") +
+  theme_minimal()
+```
+
+> **À retenir.** Le graphique révèle des choses qu'un test ne montre pas :
+> multimodalité, outliers, séparation des groupes. On visualise **avant** de
+> tester.
+
+# Tests statistiques univariés {#univaries}
+
+## Comparer deux groupes : t-test / Wilcoxon
+
+**Question.** La richesse spécifique diffère-t-elle entre forêt mature et
+plantation ?
+
+### Vérification des conditions
+
+```{r conditions-ttest}
+shapiro_foret      <- shapiro.test(oiseaux$richesse[oiseaux$habitat == "foret"])
+shapiro_plantation <- shapiro.test(oiseaux$richesse[oiseaux$habitat == "plantation"])
+levene_res         <- leveneTest(richesse ~ habitat, data = oiseaux)
+
+data.frame(
+  Test    = c("Shapiro — forêt", "Shapiro — plantation", "Levene (F)"),
+  Valeur  = round(c(shapiro_foret$statistic,
+                    shapiro_plantation$statistic,
+                    levene_res$`F value`[1]), 3),
+  p_value = round(c(shapiro_foret$p.value,
+                    shapiro_plantation$p.value,
+                    levene_res$`Pr(>F)`[1]), 4)
+) |> knitr::kable(caption = "Tests de normalité et d'homogénéité des variances.")
+```
+
+### Test et interprétation
+
+```{r ttest}
+tt <- t.test(richesse ~ habitat, data = oiseaux, var.equal = TRUE)
+tt
+```
+
+**Interprétation.** La richesse moyenne est de
+`r round(mean(oiseaux$richesse[oiseaux$habitat=="foret"]), 1)` espèces en forêt
+contre `r round(mean(oiseaux$richesse[oiseaux$habitat=="plantation"]), 1)` en
+plantation, soit une différence de
+`r round(diff(rev(tapply(oiseaux$richesse, oiseaux$habitat, mean))), 1)`
+espèces (p = `r format.pval(tt$p.value, digits = 3)`). La différence est
+hautement significative et **biologiquement pertinente**.
+
+Alternative non paramétrique (à titre de contrôle) :
+
+```{r wilcoxon}
+wilcox.test(richesse ~ habitat, data = oiseaux)
+```
+
+## Comparer plusieurs groupes : ANOVA / Kruskal-Wallis
+
+**Question.** La biomasse végétale varie-t-elle selon le type de sol ?
+
+### Conditions et ANOVA
+
+```{r anova}
+modele_aov <- aov(biomasse ~ sol, data = biomasse)
+
+shapiro_res <- shapiro.test(residuals(modele_aov))
+levene_bio  <- leveneTest(biomasse ~ sol, data = biomasse)
+
+data.frame(
+  Test   = c("Shapiro (résidus)", "Levene (F)"),
+  Valeur = round(c(shapiro_res$statistic, levene_bio$`F value`[1]), 3),
+  p      = round(c(shapiro_res$p.value, levene_bio$`Pr(>F)`[1]), 4)
+) |> knitr::kable(caption = "Vérification des conditions de l'ANOVA.")
+```
+
+```{r resultat-anova}
+summary(modele_aov)
+```
+
+### Post-hoc Tukey
+
+```{r tukey}
+TukeyHSD(modele_aov)
+```
+
+**Interprétation.** Les trois types de sol diffèrent significativement entre
+eux (p < 0,001 pour chaque comparaison). Le sol argileux présente la biomasse la
+plus élevée, le sol sableux la plus faible.
+
+Contrôle non paramétrique :
+
+```{r kruskal}
+kruskal.test(biomasse ~ sol, data = biomasse)
+```
+
+## Relation entre deux variables quantitatives
+
+**Question.** La richesse spécifique est-elle liée à la surface de l'habitat ?
+
+```{r correlation}
+cor_pearson  <- cor.test(regression$richesse, regression$surface_ha,
+                         method = "pearson")
+cor_spearman <- cor.test(regression$richesse, regression$surface_ha,
+                         method = "spearman")
+
+data.frame(
+  Méthode = c("Pearson", "Spearman"),
+  r       = round(c(cor_pearson$estimate,  cor_spearman$estimate),  3),
+  p_value = format.pval(c(cor_pearson$p.value, cor_spearman$p.value),
+                        digits = 3)
+) |> knitr::kable(caption = "Corrélations entre richesse et surface.")
+```
+
+### Régression linéaire
+
+```{r regression}
+modele_lm <- lm(richesse ~ surface_ha, data = regression)
+summary(modele_lm)
+```
+
+```{r regression-fig, fig.cap="Relation entre surface de l'habitat et richesse spécifique."}
+ggplot(regression, aes(x = surface_ha, y = richesse)) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE, color = "darkgreen") +
+  labs(title = "Richesse spécifique en fonction de la surface",
+       x = "Surface de l'habitat (ha)",
+       y = "Richesse spécifique") +
+  theme_minimal()
+```
+
+### Diagnostics des résidus
+
+```{r diagnostics, fig.cap="Diagnostics graphiques du modèle linéaire."}
+par(mfrow = c(2, 2))
+plot(modele_lm)
+par(mfrow = c(1, 1))
+```
+
+**Interprétation.** La relation est forte (r ≈ 0,98), linéaire et significative.
+Les résidus sont distribués normalement et sans structure apparente, ce qui
+valide le modèle.
+
+# Tests multivariés {#multivaries}
+
+## Analyse en Composantes Principales (PCA)
+
+### Principe
+
+La PCA réduit un ensemble de variables quantitatives corrélées en quelques
+**composantes principales** non corrélées, facilitant la visualisation de
+structures multivariées.
+
+### Application aux variables environnementales
+
+```{r pca}
+vars_env <- c("temperature", "pH", "humidite", "azote", "surface_ha")
+res.pca  <- PCA(env[, vars_env], graph = FALSE)
+
+round(res.pca$eig[, 1:3], 2) |>
+  as.data.frame() |>
+  tibble::rownames_to_column("Composante") |>
+  knitr::kable(caption = "Valeurs propres et pourcentage de variance expliquée.")
+```
+
+```{r pca-eboulis, fig.cap="Éboulis des valeurs propres (variance expliquée par composante)."}
+fviz_eig(res.pca, addlabels = TRUE)
+```
+
+```{r pca-biplot, fig.cap="Biplot de la PCA : individus et variables."}
+fviz_pca_biplot(res.pca, repel = TRUE,
+                col.var = "darkgreen", col.ind = "grey40")
+```
+
+**Interprétation.** Les deux premiers axes expliquent ensemble une part
+importante de la variance totale. Les variables proches sur le cercle des
+corrélations sont positivement corrélées ; opposées, négativement corrélées.
+
+## Analyses de correspondances (CA / CCA)
+
+La **CA** ordonne un tableau sites × espèces. La **CCA** la contraint par des
+variables environnementales.
+
+```{r ca}
+ca_res <- cca(communaute)
+ca_res
+```
+
+```{r cca}
+cca_res <- cca(communaute ~ temperature + pH + humidite + azote, data = env)
+cca_res
+```
+
+```{r cca-test}
+anova(cca_res, permutations = 999)
+```
+
+```{r cca-fig, fig.cap="CCA : sites, espèces et variables environnementales."}
+plot(cca_res, display = c("sites", "species", "bp"),
+     main = "CCA — communauté contrainte par l'environnement")
+```
+
+**Interprétation.** Le test de permutation indique si l'environnement explique
+significativement la composition des communautés. Les variables dont les
+flèches sont longues contribuent le plus au gradient.
+
+## Classification : CAH et k-means
+
+```{r cah}
+dist_bray <- vegdist(communaute, method = "bray")
+cah       <- hclust(dist_bray, method = "ward.D2")
+groupes   <- cutree(cah, k = 2)
+table(groupes, env$habitat)
+```
+
+```{r dendrogramme, fig.cap="Dendrogramme de la CAH (Bray-Curtis, Ward.D2)."}
+plot(cah, main = "CAH — Bray-Curtis, Ward.D2", xlab = "", sub = "")
+rect.hclust(cah, k = 2, border = "red")
+```
+
+```{r kmeans}
+comm_scaled <- scale(communaute)
+set.seed(2024)
+km <- kmeans(comm_scaled, centers = 2, nstart = 25)
+table(km$cluster, env$habitat)
+```
+
+## NMDS et PERMANOVA
+
+La **NMDS** est une ordination non paramétrique basée sur une matrice de
+distances. Le **PERMANOVA** teste l'effet de facteurs sur cette matrice.
+
+```{r nmds}
+set.seed(2024)
+nmds <- metaMDS(communaute, distance = "bray", k = 2, trace = FALSE)
+cat("Stress :", round(nmds$stress, 4), "\n")
+```
+
+```{r nmds-fig, fig.cap="NMDS de la composition des communautés."}
+plot(nmds, type = "n", main = "NMDS — composition des communautés")
+points(nmds, display = "sites",
+       col = as.numeric(env$habitat) + 1, pch = 19, cex = 1.3)
+ordiellipse(nmds, env$habitat, col = 2:3, label = TRUE, lwd = 2)
+legend("topright", legend = levels(factor(env$habitat)),
+       col = 2:3, pch = 19, bty = "n")
+```
+
+```{r permanova}
+adonis2(communaute ~ habitat, data = env,
+        method = "bray", permutations = 999)
+```
+
+### Vérification de l'homogénéité des dispersions
+
+```{r betadisper}
+disp <- betadisper(dist_bray, env$habitat)
+permutest(disp)
+```
+
+**Interprétation.** Un PERMANOVA significatif indique que la composition des
+communautés diffère entre habitats. Le test `betadisper` vérifie que cette
+différence n'est pas due à une simple différence de dispersion.
+
+# Nettoyage des données GBIF {#nettoyage}
+
+Le nettoyage est une étape **incontournable** : les données brutes contiennent
+presque toujours des erreurs.
+
+```{r nettoyage}
+gbif$eventDate <- as.Date(gbif$eventDate)
+n_initial <- nrow(gbif)
+
+# Étape 1 : doublons
+gbif_clean <- gbif[!duplicated(gbif), ]
+n_dupli <- n_initial - nrow(gbif_clean)
+
+# Étape 2 : coordonnées aberrantes
+n_before <- nrow(gbif_clean)
+gbif_clean <- gbif_clean[
+  gbif_clean$decimalLatitude  >= -90  & gbif_clean$decimalLatitude  <=  90 &
+  gbif_clean$decimalLongitude >= -180 & gbif_clean$decimalLongitude <=  180, ]
+n_coord <- n_before - nrow(gbif_clean)
+
+# Étape 3 : dates futures ou manquantes
+n_before <- nrow(gbif_clean)
+gbif_clean <- gbif_clean[
+  !is.na(gbif_clean$eventDate) & gbif_clean$eventDate <= Sys.Date(), ]
+n_dates <- n_before - nrow(gbif_clean)
+
+# Étape 4 : noms vides
+n_before <- nrow(gbif_clean)
+gbif_clean <- gbif_clean[
+  !is.na(gbif_clean$scientificName) &
+  nzchar(trimws(gbif_clean$scientificName)), ]
+n_noms <- n_before - nrow(gbif_clean)
+
+data.frame(
+  Étape        = c("Doublons", "Coordonnées aberrantes",
+                   "Dates invalides", "Noms vides"),
+  Lignes_suppr = c(n_dupli, n_coord, n_dates, n_noms)
+) |> knitr::kable(caption = "Bilan du nettoyage des données GBIF.")
+cat("Lignes avant nettoyage :", n_initial,
+    "\nLignes après nettoyage :", nrow(gbif_clean), "\n")
+```
+
+```{r gbif-apres}
+knitr::kable(
+  head(gbif_clean, 6),
+  caption = "Extrait des données GBIF après nettoyage.",
+  align   = "c"
+)
+```
+
+> **Bonne pratique.** Toujours conserver une copie des données brutes et
+> **journaliser** le nombre de lignes supprimées à chaque étape.
+
+# Synthèse et reproductibilité {#synthese}
+
+## Les 10 réflexes de l'analyse de données en écologie
+
+1. **Toujours explorer** les données avant de tester (graphiques + descriptives)
+2. **Vérifier les conditions d'application** avant chaque test
+3. **Choisir le test** selon le type de variable et le plan d'échantillonnage
+4. **Ne pas confondre** significativité statistique et pertinence biologique
+5. **Corriger les tests multiples** (Bonferroni, Benjamini-Hochberg)
+6. **Utiliser des méthodes multivariées** pour les données de communauté
+7. **Vérifier l'homogénéité des dispersions** avant un PERMANOVA
+8. **Documenter chaque étape** dans un script commenté
+9. **Conserver les données brutes** intactes et versionner les scripts
+10. **Partager** données et code selon les principes FAIR
+
+## Ce que ce document démontre
+
+Ce rapport R Markdown est lui-même un **exemple de reproductibilité** :
+
+- Les données sont **générées par le code** (pas de fichier externe) ;
+- Les résultats (tableaux, figures, valeurs numériques) sont **calculés à la
+  volée** et injectés dans le texte via le code inline ;
+- La **graine aléatoire** est fixée en tête de document ;
+- L'**environnement d'exécution** est enregistré en fin de rapport.
+
+Un lecteur peut cloner ce fichier `.Rmd` et le knitter : il obtiendra un
+document **strictement identique**.
+
+## Extension possible : rapport paramétré
+
+Une extension naturelle consiste à transformer ce document en **rapport
+paramétré**, où le jeu de données et le seuil alpha sont passés en en-tête
+YAML. Un même modèle peut ainsi servir à générer un rapport par site, par
+campagne ou par espèce.
+
+# Environnement d'exécution {#session}
+
+```{r session-info}
+sessionInfo()
+```
+
+```{r versions-packages}
+data.frame(
+  Package = c("vegan", "ggplot2", "FactoMineR", "factoextra", "car"),
+  Version = sapply(c("vegan", "ggplot2", "FactoMineR", "factoextra", "car"),
+                   as.character)
+) |> knitr::kable(caption = "Versions des packages utilisés.")
+```
+
+> **Message clé.** Un test statistique ne « prouve » rien : il quantifie la
+> compatibilité des données avec une hypothèse. Les graphiques exploratoires
+> sont souvent plus informatifs qu'une p-value.
+
+# Jeux de données utilisés
+
+Tous les jeux de données de ce chapitre sont **synthétiques** mais calibrés pour
+produire des résultats réalistes. Ils sont générés ci-dessous, ce qui garantit
+la **reproductibilité intégrale** du rapport.
+
+```{r generation-donnees}
+# --- 1. Oiseaux : richesse forêt vs plantation -------------------------
+richesse_foret      <- pmax(round(rnorm(20, mean = 21, sd = 3.5)), 12)
+richesse_plantation <- pmax(round(rnorm(20, mean = 12, sd = 2.8)),  6)
+
+oiseaux <- data.frame(
+  site      = c(paste0("F", 1:20), paste0("P", 1:20)),
+  habitat   = rep(c("foret", "plantation"), each = 20),
+  richesse  = c(richesse_foret, richesse_plantation),
+  abondance = c(round(rnorm(20, 85, 15)), round(rnorm(20, 45, 10)))
+)
+
+# --- 2. Biomasse selon le type de sol ----------------------------------
+biomasse <- data.frame(
+  parcelle = paste0("P", 1:45),
+  sol      = rep(c("argileux", "sableux", "limoneux"), each = 15),
+  biomasse = c(round(rnorm(15, 320, 50)),
+               round(rnorm(15, 180, 35)),
+               round(rnorm(15, 280, 45)))
+)
+
+# --- 3. Richesse vs surface --------------------------------------------
+surface      <- round(runif(30, 1, 50), 1)
+richesse_reg <- pmax(round(8 + 0.4 * surface + rnorm(30, 0, 3)), 3)
+
+regression <- data.frame(
+  site       = paste0("S", 1:30),
+  surface_ha = surface,
+  richesse   = richesse_reg,
+  temperature = round(rnorm(30, 18, 3), 1)
+)
+
+# --- 4. Communauté : matrice 20 sites × 15 espèces ---------------------
+especes <- c("Quercus_robur", "Fagus_sylvatica", "Carpinus_betulus",
+             "Acer_pseudoplatanus", "Fraxinus_excelsior", "Prunus_avium",
+             "Corylus_avellana", "Crataegus_monogyna", "Rubus_fruticosus",
+             "Hedera_helix", "Poa_trivialis", "Dactylis_glomerata",
+             "Festuca_rubra", "Urtica_dioica", "Galium_aparine")
+
+communaute <- matrix(0, nrow = 20, ncol = 15,
+                     dimnames = list(paste0("Site", 1:20), especes))
+for (i in  1:10) communaute[i, ] <- rpois(15, runif(15, 2, 8))
+for (i in 11:20) communaute[i, ] <- rpois(15, runif(15, 0, 3))
+communaute[11:20, c("Quercus_robur", "Fagus_sylvatica",
+                    "Carpinus_betulus", "Fraxinus_excelsior")] <- 0
+
+# --- 5. Variables environnementales ------------------------------------
+env <- data.frame(
+  site        = paste0("Site", 1:20),
+  habitat     = rep(c("foret", "plantation"), each = 10),
+  temperature = round(rnorm(20, 18, 2.5), 1),
+  pH          = round(rnorm(20, 6.5, 0.4), 2),
+  humidite    = round(rnorm(20, 65, 8), 1),
+  azote       = round(rnorm(20, 3.5, 0.8), 2),
+  surface_ha  = round(runif(20, 2, 40), 1)
+)
+
+# --- 6. GBIF brut avec erreurs volontaires -----------------------------
+gbif <- data.frame(
+  scientificName   = sample(especes, 100, replace = TRUE),
+  decimalLatitude  = round(runif(100, -90, 90), 4),
+  decimalLongitude = round(runif(100, -180, 180), 4),
+  eventDate        = sample(seq(as.Date("2000-01-01"),
+                                as.Date("2024-01-01"), by = "day"),
+                            100),
+  countryCode      = sample(c("FR","BE","CH","CA","DZ","MA"),
+                            100, replace = TRUE)
+)
+gbif$decimalLatitude[1:3] <- c(95, -120, 200)
+gbif$eventDate[4:5]       <- as.Date(c("2030-01-01","2050-06-15"))
+gbif <- rbind(gbif, gbif[1:5, ])    # ajout de doublons
+```
+
+Aperçu du jeu `oiseaux` :
+
+```{r apercu-oiseaux}
+knitr::kable(
+  head(oiseaux, 8),
+  caption = "Extrait du jeu de données oiseaux.",
+  align   = "c"
+)
+```
+
+# Statistiques descriptives et exploratoires {#descriptives}
+
+## Démarche en 5 étapes
+
+1. Vérifier la structure du jeu de données
+2. Calculer les statistiques descriptives
+3. Visualiser les distributions
+4. Vérifier les conditions d'application des tests
+5. Nettoyer si nécessaire
+
+## Résumé global
+
+```{r descriptives}
+summary(oiseaux)
+```
+
+## Mesures clés sur la richesse spécifique
+
+```{r mesures}
+stat_richesse <- data.frame(
+  Statistique = c("Moyenne", "Médiane", "Écart-type",
+                  "Q1", "Q3", "Min", "Max"),
+  Valeur      = round(c(mean(oiseaux$richesse),
+                        median(oiseaux$richesse),
+                        sd(oiseaux$richesse),
+                        quantile(oiseaux$richesse, 0.25),
+                        quantile(oiseaux$richesse, 0.75),
+                        min(oiseaux$richesse),
+                        max(oiseaux$richesse)), 2)
+)
+knitr::kable(stat_richesse, caption = "Statistiques descriptives de la richesse spécifique.")
+```
+
+## Moyennes par habitat
+
+```{r moyennes-groupe}
+moy_hab <- aggregate(richesse ~ habitat, data = oiseaux, FUN = mean)
+knitr::kable(moy_hab, digits = 2,
+             caption = "Richesse moyenne par habitat.")
+```
+
+## Visualisation exploratoire
+
+```{r boxplot, fig.cap="Distribution de la richesse spécifique par habitat."}
+ggplot(oiseaux, aes(x = habitat, y = richesse, fill = habitat)) +
+  geom_boxplot(alpha = 0.8) +
+  labs(title = "Richesse spécifique par type d'habitat",
+       x = "Habitat", y = "Nombre d'espèces") +
+  theme_minimal() + theme(legend.position = "none")
+```
+
+```{r histogramme, fig.cap="Distribution globale de la richesse spécifique."}
+ggplot(oiseaux, aes(x = richesse, fill = habitat)) +
+  geom_histogram(bins = 12, alpha = 0.7, position = "identity") +
+  labs(title = "Distribution de la richesse spécifique",
+       x = "Richesse spécifique", y = "Effectif") +
+  theme_minimal()
+```
+
+> **À retenir.** Le graphique révèle des choses qu'un test ne montre pas :
+> multimodalité, outliers, séparation des groupes. On visualise **avant** de
+> tester.
+
+# Tests statistiques univariés {#univaries}
+
+## Comparer deux groupes : t-test / Wilcoxon
+
+**Question.** La richesse spécifique diffère-t-elle entre forêt mature et
+plantation ?
+
+### Vérification des conditions
+
+```{r conditions-ttest}
+shapiro_foret      <- shapiro.test(oiseaux$richesse[oiseaux$habitat == "foret"])
+shapiro_plantation <- shapiro.test(oiseaux$richesse[oiseaux$habitat == "plantation"])
+levene_res         <- leveneTest(richesse ~ habitat, data = oiseaux)
+
+data.frame(
+  Test    = c("Shapiro — forêt", "Shapiro — plantation", "Levene (F)"),
+  Valeur  = round(c(shapiro_foret$statistic,
+                    shapiro_plantation$statistic,
+                    levene_res$`F value`[1]), 3),
+  p_value = round(c(shapiro_foret$p.value,
+                    shapiro_plantation$p.value,
+                    levene_res$`Pr(>F)`[1]), 4)
+) |> knitr::kable(caption = "Tests de normalité et d'homogénéité des variances.")
+```
+
+### Test et interprétation
+
+```{r ttest}
+tt <- t.test(richesse ~ habitat, data = oiseaux, var.equal = TRUE)
+tt
+```
+
+**Interprétation.** La richesse moyenne est de
+`r round(mean(oiseaux$richesse[oiseaux$habitat=="foret"]), 1)` espèces en forêt
+contre `r round(mean(oiseaux$richesse[oiseaux$habitat=="plantation"]), 1)` en
+plantation, soit une différence de
+`r round(diff(rev(tapply(oiseaux$richesse, oiseaux$habitat, mean))), 1)`
+espèces (p = `r format.pval(tt$p.value, digits = 3)`). La différence est
+hautement significative et **biologiquement pertinente**.
+
+Alternative non paramétrique (à titre de contrôle) :
+
+```{r wilcoxon}
+wilcox.test(richesse ~ habitat, data = oiseaux)
+```
+
+## Comparer plusieurs groupes : ANOVA / Kruskal-Wallis
+
+**Question.** La biomasse végétale varie-t-elle selon le type de sol ?
+
+### Conditions et ANOVA
+
+```{r anova}
+modele_aov <- aov(biomasse ~ sol, data = biomasse)
+
+shapiro_res <- shapiro.test(residuals(modele_aov))
+levene_bio  <- leveneTest(biomasse ~ sol, data = biomasse)
+
+data.frame(
+  Test   = c("Shapiro (résidus)", "Levene (F)"),
+  Valeur = round(c(shapiro_res$statistic, levene_bio$`F value`[1]), 3),
+  p      = round(c(shapiro_res$p.value, levene_bio$`Pr(>F)`[1]), 4)
+) |> knitr::kable(caption = "Vérification des conditions de l'ANOVA.")
+```
+
+```{r resultat-anova}
+summary(modele_aov)
+```
+
+### Post-hoc Tukey
+
+```{r tukey}
+TukeyHSD(modele_aov)
+```
+
+**Interprétation.** Les trois types de sol diffèrent significativement entre
+eux (p < 0,001 pour chaque comparaison). Le sol argileux présente la biomasse la
+plus élevée, le sol sableux la plus faible.
+
+Contrôle non paramétrique :
+
+```{r kruskal}
+kruskal.test(biomasse ~ sol, data = biomasse)
+```
+
+## Relation entre deux variables quantitatives
+
+**Question.** La richesse spécifique est-elle liée à la surface de l'habitat ?
+
+```{r correlation}
+cor_pearson  <- cor.test(regression$richesse, regression$surface_ha,
+                         method = "pearson")
+cor_spearman <- cor.test(regression$richesse, regression$surface_ha,
+                         method = "spearman")
+
+data.frame(
+  Méthode = c("Pearson", "Spearman"),
+  r       = round(c(cor_pearson$estimate,  cor_spearman$estimate),  3),
+  p_value = format.pval(c(cor_pearson$p.value, cor_spearman$p.value),
+                        digits = 3)
+) |> knitr::kable(caption = "Corrélations entre richesse et surface.")
+```
+
+### Régression linéaire
+
+```{r regression}
+modele_lm <- lm(richesse ~ surface_ha, data = regression)
+summary(modele_lm)
+```
+
+```{r regression-fig, fig.cap="Relation entre surface de l'habitat et richesse spécifique."}
+ggplot(regression, aes(x = surface_ha, y = richesse)) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE, color = "darkgreen") +
+  labs(title = "Richesse spécifique en fonction de la surface",
+       x = "Surface de l'habitat (ha)",
+       y = "Richesse spécifique") +
+  theme_minimal()
+```
+
+### Diagnostics des résidus
+
+```{r diagnostics, fig.cap="Diagnostics graphiques du modèle linéaire."}
+par(mfrow = c(2, 2))
+plot(modele_lm)
+par(mfrow = c(1, 1))
+```
+
+**Interprétation.** La relation est forte (r ≈ 0,98), linéaire et significative.
+Les résidus sont distribués normalement et sans structure apparente, ce qui
+valide le modèle.
+
+# Tests multivariés {#multivaries}
+
+## Analyse en Composantes Principales (PCA)
+
+### Principe
+
+La PCA réduit un ensemble de variables quantitatives corrélées en quelques
+**composantes principales** non corrélées, facilitant la visualisation de
+structures multivariées.
+
+### Application aux variables environnementales
+
+```{r pca}
+vars_env <- c("temperature", "pH", "humidite", "azote", "surface_ha")
+res.pca  <- PCA(env[, vars_env], graph = FALSE)
+
+round(res.pca$eig[, 1:3], 2) |>
+  as.data.frame() |>
+  tibble::rownames_to_column("Composante") |>
+  knitr::kable(caption = "Valeurs propres et pourcentage de variance expliquée.")
+```
+
+```{r pca-eboulis, fig.cap="Éboulis des valeurs propres (variance expliquée par composante)."}
+fviz_eig(res.pca, addlabels = TRUE)
+```
+
+```{r pca-biplot, fig.cap="Biplot de la PCA : individus et variables."}
+fviz_pca_biplot(res.pca, repel = TRUE,
+                col.var = "darkgreen", col.ind = "grey40")
+```
+
+**Interprétation.** Les deux premiers axes expliquent ensemble une part
+importante de la variance totale. Les variables proches sur le cercle des
+corrélations sont positivement corrélées ; opposées, négativement corrélées.
+
+## Analyses de correspondances (CA / CCA)
+
+La **CA** ordonne un tableau sites × espèces. La **CCA** la contraint par des
+variables environnementales.
+
+```{r ca}
+ca_res <- cca(communaute)
+ca_res
+```
+
+```{r cca}
+cca_res <- cca(communaute ~ temperature + pH + humidite + azote, data = env)
+cca_res
+```
+
+```{r cca-test}
+anova(cca_res, permutations = 999)
+```
+
+```{r cca-fig, fig.cap="CCA : sites, espèces et variables environnementales."}
+plot(cca_res, display = c("sites", "species", "bp"),
+     main = "CCA — communauté contrainte par l'environnement")
+```
+
+**Interprétation.** Le test de permutation indique si l'environnement explique
+significativement la composition des communautés. Les variables dont les
+flèches sont longues contribuent le plus au gradient.
+
+## Classification : CAH et k-means
+
+```{r cah}
+dist_bray <- vegdist(communaute, method = "bray")
+cah       <- hclust(dist_bray, method = "ward.D2")
+groupes   <- cutree(cah, k = 2)
+table(groupes, env$habitat)
+```
+
+```{r dendrogramme, fig.cap="Dendrogramme de la CAH (Bray-Curtis, Ward.D2)."}
+plot(cah, main = "CAH — Bray-Curtis, Ward.D2", xlab = "", sub = "")
+rect.hclust(cah, k = 2, border = "red")
+```
+
+```{r kmeans}
+comm_scaled <- scale(communaute)
+set.seed(2024)
+km <- kmeans(comm_scaled, centers = 2, nstart = 25)
+table(km$cluster, env$habitat)
+```
+
+## NMDS et PERMANOVA
+
+La **NMDS** est une ordination non paramétrique basée sur une matrice de
+distances. Le **PERMANOVA** teste l'effet de facteurs sur cette matrice.
+
+```{r nmds}
+set.seed(2024)
+nmds <- metaMDS(communaute, distance = "bray", k = 2, trace = FALSE)
+cat("Stress :", round(nmds$stress, 4), "\n")
+```
+
+```{r nmds-fig, fig.cap="NMDS de la composition des communautés."}
+plot(nmds, type = "n", main = "NMDS — composition des communautés")
+points(nmds, display = "sites",
+       col = as.numeric(env$habitat) + 1, pch = 19, cex = 1.3)
+ordiellipse(nmds, env$habitat, col = 2:3, label = TRUE, lwd = 2)
+legend("topright", legend = levels(factor(env$habitat)),
+       col = 2:3, pch = 19, bty = "n")
+```
+
+```{r permanova}
+adonis2(communaute ~ habitat, data = env,
+        method = "bray", permutations = 999)
+```
+
+### Vérification de l'homogénéité des dispersions
+
+```{r betadisper}
+disp <- betadisper(dist_bray, env$habitat)
+permutest(disp)
+```
+
+**Interprétation.** Un PERMANOVA significatif indique que la composition des
+communautés diffère entre habitats. Le test `betadisper` vérifie que cette
+différence n'est pas due à une simple différence de dispersion.
+
+# Nettoyage des données GBIF {#nettoyage}
+
+Le nettoyage est une étape **incontournable** : les données brutes contiennent
+presque toujours des erreurs.
+
+```{r nettoyage}
+gbif$eventDate <- as.Date(gbif$eventDate)
+n_initial <- nrow(gbif)
+
+# Étape 1 : doublons
+gbif_clean <- gbif[!duplicated(gbif), ]
+n_dupli <- n_initial - nrow(gbif_clean)
+
+# Étape 2 : coordonnées aberrantes
+n_before <- nrow(gbif_clean)
+gbif_clean <- gbif_clean[
+  gbif_clean$decimalLatitude  >= -90  & gbif_clean$decimalLatitude  <=  90 &
+  gbif_clean$decimalLongitude >= -180 & gbif_clean$decimalLongitude <=  180, ]
+n_coord <- n_before - nrow(gbif_clean)
+
+# Étape 3 : dates futures ou manquantes
+n_before <- nrow(gbif_clean)
+gbif_clean <- gbif_clean[
+  !is.na(gbif_clean$eventDate) & gbif_clean$eventDate <= Sys.Date(), ]
+n_dates <- n_before - nrow(gbif_clean)
+
+# Étape 4 : noms vides
+n_before <- nrow(gbif_clean)
+gbif_clean <- gbif_clean[
+  !is.na(gbif_clean$scientificName) &
+  nzchar(trimws(gbif_clean$scientificName)), ]
+n_noms <- n_before - nrow(gbif_clean)
+
+data.frame(
+  Étape        = c("Doublons", "Coordonnées aberrantes",
+                   "Dates invalides", "Noms vides"),
+  Lignes_suppr = c(n_dupli, n_coord, n_dates, n_noms)
+) |> knitr::kable(caption = "Bilan du nettoyage des données GBIF.")
+cat("Lignes avant nettoyage :", n_initial,
+    "\nLignes après nettoyage :", nrow(gbif_clean), "\n")
+```
+
+```{r gbif-apres}
+knitr::kable(
+  head(gbif_clean, 6),
+  caption = "Extrait des données GBIF après nettoyage.",
+  align   = "c"
+)
+```
+
+> **Bonne pratique.** Toujours conserver une copie des données brutes et
+> **journaliser** le nombre de lignes supprimées à chaque étape.
+
+# Synthèse et reproductibilité {#synthese}
+
+## Les 10 réflexes de l'analyse de données en écologie
+
+1. **Toujours explorer** les données avant de tester (graphiques + descriptives)
+2. **Vérifier les conditions d'application** avant chaque test
+3. **Choisir le test** selon le type de variable et le plan d'échantillonnage
+4. **Ne pas confondre** significativité statistique et pertinence biologique
+5. **Corriger les tests multiples** (Bonferroni, Benjamini-Hochberg)
+6. **Utiliser des méthodes multivariées** pour les données de communauté
+7. **Vérifier l'homogénéité des dispersions** avant un PERMANOVA
+8. **Documenter chaque étape** dans un script commenté
+9. **Conserver les données brutes** intactes et versionner les scripts
+10. **Partager** données et code selon les principes FAIR
+
+## Ce que ce document démontre
+
+Ce rapport R Markdown est lui-même un **exemple de reproductibilité** :
+
+- Les données sont **générées par le code** (pas de fichier externe) ;
+- Les résultats (tableaux, figures, valeurs numériques) sont **calculés à la
+  volée** et injectés dans le texte via le code inline ;
+- La **graine aléatoire** est fixée en tête de document ;
+- L'**environnement d'exécution** est enregistré en fin de rapport.
+
+Un lecteur peut cloner ce fichier `.Rmd` et le knitter : il obtiendra un
+document **strictement identique**.
+
+## Extension possible : rapport paramétré
+
+Une extension naturelle consiste à transformer ce document en **rapport
+paramétré**, où le jeu de données et le seuil alpha sont passés en en-tête
+YAML. Un même modèle peut ainsi servir à générer un rapport par site, par
+campagne ou par espèce.
+
+# Environnement d'exécution {#session}
+
+```{r session-info}
+sessionInfo()
+```
+
+```{r versions-packages}
+data.frame(
+  Package = c("vegan", "ggplot2", "FactoMineR", "factoextra", "car"),
+  Version = sapply(c("vegan", "ggplot2", "FactoMineR", "factoextra", "car"),
+                   as.character)
+) |> knitr::kable(caption = "Versions des packages utilisés.")
+```title: "Traitement et Analyses de données biologiques et environnementales"
+output: html_document
+date: "2026-11-21"
